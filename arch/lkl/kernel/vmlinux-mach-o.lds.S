@@ -19,7 +19,7 @@ ___initcall##level##_start:
 #define ADDR(x)
 
 #undef INIT_CALLS
-# XXX: dunno why crash INIT_CALLS_LEVEL(early);
+# XXX: dunno why crash: initcall level "early" was originally excluded here
 #define INIT_CALLS						\
 	.section __DATA,.initcall_start; .globl ___initcall_start; \
 	.p2align        3; ___initcall_start:		\

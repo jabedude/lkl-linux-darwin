@@ -7,5 +7,7 @@ ifeq ($(OUTPUT_FORMAT),mach-o-x86-64)
 extra-y += mach-o-linker.o vmlinux-mach-o.lds vmlinux-mach-o.o
 endif
 
+# arm64 Mach-O as treats ';' as a comment char, not a statement
+# separator like x86 did, so split statements onto real lines first
 $(obj)/vmlinux-mach-o.o: $(src)/vmlinux-mach-o.lds FORCE
-	$(Q)$(AS) -c -o $@ $<
+	$(Q)tr ';' '\n' < $< | $(AS) -c -o $@ -

@@ -47,7 +47,20 @@ all: lkl.o
 vmlinux:
 
 lkl.o: vmlinux
+ifeq ($(OUTPUT_FORMAT),mach-o-x86-64)
+# GNU objcopy corrupts the Mach-O __compact_unwind section; use native
+# ld -r with an exported-symbols list for the same localization effect
+	$(Q)printf '_%s\n' $(LKL_ENTRY_POINTS) > lkl-exported.txt
+# the LDFLAGS_vmlinux mechanism fails to add the mach-o shim object to
+# the vmlinux link, so fold it in here. It must come FIRST so its
+# section-boundary labels land at the start of each merged section.
+# mach-o-linker.o is omitted: its sys_* stubs duplicate symbols the
+# modern toolchain resolves from the kernel itself.
+	$(Q)ld -r arch/lkl/kernel/vmlinux-mach-o.o vmlinux \
+		-o lkl.o -exported_symbols_list lkl-exported.txt
+else
 	$(OBJCOPY) $(OBJCOPY_REMOVE_SECTION) -R .syscall_defs $(foreach sym,$(LKL_ENTRY_POINTS),-G$(prefix)$(sym)) vmlinux lkl.o
+endif
 
 arch/lkl/include/generated/uapi/asm/syscall_defs.h: vmlinux
 ifneq ($(OUTPUT_FORMAT),mach-o-x86-64)

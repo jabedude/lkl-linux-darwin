@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #define _HAVE_STRING_ARCH_strtok_r
 #include <string.h>
+#include <arpa/inet.h>
 #include <lkl_host.h>
 #include <lkl_config.h>
 
