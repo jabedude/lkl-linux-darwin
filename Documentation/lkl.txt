@@ -19,10 +19,69 @@ LKL is implemented as an architecture port in arch/lkl. It uses host operations
 defined by the application or a host library (tools/lkl/lib).
 
 
+About this fork: Linux drivers on macOS
+=======================================
+
+This fork revives and extends the experimental Mach-O host support so
+that LKL builds and runs natively on Apple Silicon Macs. The long-term
+goal is to use the Linux kernel's own filesystem drivers on macOS:
+mounting filesystems that macOS cannot (ext4, btrfs, XFS -- and NTFS
+once rebased onto a kernel that has ntfs3) by running the real
+in-kernel drivers inside an ordinary macOS process, and exposing them
+to the system through a userspace frontend such as a localhost NFSv3
+server or an FSKit module. No kernel extensions, no virtual machine.
+
+Status (July 2026, macOS 15 arm64, Xcode clang 17):
+
+* the kernel builds natively for arm64 Mach-O and boots to init
+* all 35 tests/boot tests pass
+* all 10 tests/disk tests pass against a real ext4 image (mount,
+  readdir, unmount through the in-kernel ext4 driver)
+
+Changes over the original 2019 lkl-mach-o branch (see the git log for
+details). Every fix addressed toolchain drift rather than an
+architectural problem:
+
+* DWARF 5 debug info is disabled: the Mach-O assembler cannot resolve
+  the uleb128 offset pairs clang 17 emits into __debug_loclists
+* the linker-script replacement (vmlinux-mach-o.lds.S) is split on ';'
+  before assembling: on arm64 Mach-O ';' is a comment character, not a
+  statement separator as it was on x86-64, so every .globl and label
+  after a ';' was silently discarded
+* lkl.o is produced with native ld -r -exported_symbols_list instead
+  of GNU objcopy, which corrupts the __compact_unwind section
+* mach-o-linker.o's sys_* stubs are no longer linked: modern clang
+  resolves the kernel's own weak/alias syscall symbols, so the stubs
+  became duplicates
+* the syscall table is invoked through a fixed six-argument prototype:
+  the original variadic cast happened to work on x86-64 SysV (fixed
+  and variadic args share registers there) but breaks on the Apple
+  ARM64 ABI, where variadic arguments are passed on the stack -- every
+  syscall received garbage past its first argument
+* headers_install.py runs serially: python3 multiprocessing on macOS
+  uses spawn semantics and hangs re-importing the script
+
+Known warts:
+
+* jiffies is a zero-size label in its own section rather than an alias
+  of jiffies_64; timer-heavy workloads may misbehave
+* kallsyms boundary symbols point at placeholder sections, so oops
+  symbolication is unreliable
+* boot spends ~8 seconds in the raid6 benchmark; disable
+  CONFIG_RAID6_PQ for near-instant boots
+
+Next steps: forward-port this (~50 line) patch set onto current
+upstream LKL (kernel 6.12) for ntfs3 and modern on-disk feature
+support, then build the macOS mount frontend on top of lkl_mount()
+and the lkl_sys_*() API.
+
+
 Supported hosts
 ===============
 
-The supported hosts for now are POSIX and Windows userspace applications.
+The supported hosts for now are POSIX and Windows userspace
+applications. This fork adds experimental macOS (arm64 Mach-O) host
+support; see the sections above and "Building LKL on macOS" below.
 
 
 Building LKL, the host library and LKL based tools
@@ -43,6 +102,49 @@ APIs
 
 * lklfuse - a tool that can mount a filesystem image in userspace,
   without root priviledges, using FUSE
+
+
+Building LKL on macOS (Apple Silicon)
+-------------------------------------
+
+The kernel tree contains paths that differ only by letter case, so the
+checkout must live on a case-sensitive filesystem. APFS is
+case-insensitive by default; create a case-sensitive disk image (or
+add a case-sensitive APFS volume in Disk Utility):
+
+    $ hdiutil create -size 20g -fs 'Case-sensitive APFS' -type SPARSE \
+          -volname lkl-work lkl-work.sparseimage
+    $ hdiutil attach lkl-work.sparseimage -mountpoint /Volumes/lkl-work
+
+Install the GNU tools the build needs:
+
+    $ brew install binutils gnu-sed coreutils e2fsprogs
+
+Create a shim directory exposing only the three names the build
+requires (python, GNU sed as sed, GNU objcopy as objcopy) and prepend
+it to PATH. Do not put the whole binutils bin directory on PATH:
+Apple's ar/ld/clang must keep winning for those names, since GNU ar
+and ld mangle Mach-O objects.
+
+    $ mkdir -p /Volumes/lkl-work/shimbin
+    $ ln -sf "$(which python3)" /Volumes/lkl-work/shimbin/python
+    $ ln -sf /opt/homebrew/opt/gnu-sed/libexec/gnubin/sed \
+          /Volumes/lkl-work/shimbin/sed
+    $ ln -sf /opt/homebrew/opt/binutils/bin/objcopy \
+          /Volumes/lkl-work/shimbin/objcopy
+    $ export PATH=/Volumes/lkl-work/shimbin:$PATH
+
+Then build and run the boot tests:
+
+    $ make -C tools/lkl -j$(sysctl -n hw.ncpu)
+    $ ./tools/lkl/tests/boot
+
+To exercise the disk tests against a real ext4 image, format one with
+Homebrew's e2fsprogs:
+
+    $ dd if=/dev/zero of=/tmp/ext4.img bs=1m count=32
+    $ /opt/homebrew/opt/e2fsprogs/sbin/mkfs.ext4 -q -F /tmp/ext4.img
+    $ ./tools/lkl/tests/disk -d /tmp/ext4.img -t ext4
 
 
 Building LKL on FreeBSD
