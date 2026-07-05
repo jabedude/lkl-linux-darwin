@@ -19,7 +19,15 @@
 static asmlinkage long sys_virtio_mmio_device_add(long base, long size,
 						  unsigned int irq);
 
-typedef long (*syscall_handler_t)(long arg1, ...);
+/*
+ * Must be a fixed-arity prototype, not (long, ...): on the Apple ARM64
+ * ABI variadic args are passed on the stack while the real syscall
+ * handlers read args from registers x0-x5, so a variadic cast delivers
+ * only arg1 correctly. (Harmless on x86-64 SysV, where the first 6
+ * variadic and fixed args share the same registers.)
+ */
+typedef long (*syscall_handler_t)(long arg1, long arg2, long arg3,
+				  long arg4, long arg5, long arg6);
 
 #undef __SYSCALL
 #define __SYSCALL(nr, sym) [nr] = (syscall_handler_t)sym,
