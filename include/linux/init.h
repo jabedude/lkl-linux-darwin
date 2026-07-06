@@ -47,13 +47,26 @@
  * section.
  */
 
+/*
+ * Mach-O (the LKL Darwin host port) section specifiers need a
+ * "segment," prefix; ELF hosts use the bare names collected by the
+ * linker script.
+ */
+#ifdef __APPLE__
+# define __init_stext(sect)	"__TEXT," sect ",regular,pure_instructions"
+# define __init_sdata(sect)	"__DATA," sect
+#else
+# define __init_stext(sect)	sect
+# define __init_sdata(sect)	sect
+#endif
+
 /* These are for everybody (although not all archs will actually
    discard it in modules) */
-#define __init		__section(".init.text") __cold  __latent_entropy __noinitretpoline
-#define __initdata	__section(".init.data")
-#define __initconst	__section(".init.rodata")
-#define __exitdata	__section(".exit.data")
-#define __exit_call	__used __section(".exitcall.exit")
+#define __init		__section(__init_stext(".init.text")) __cold  __latent_entropy __noinitretpoline
+#define __initdata	__section(__init_sdata(".init.data"))
+#define __initconst	__section(__init_sdata(".init.rodata"))
+#define __exitdata	__section(__init_sdata(".exit.data"))
+#define __exit_call	__used __section(__init_sdata(".exitcall.exit"))
 
 /*
  * modpost check for section mismatches during the kernel build.
@@ -72,9 +85,9 @@
  *
  * The markers follow same syntax rules as __init / __initdata.
  */
-#define __ref            __section(".ref.text") noinline
-#define __refdata        __section(".ref.data")
-#define __refconst       __section(".ref.rodata")
+#define __ref            __section(__init_stext(".ref.text")) noinline
+#define __refdata        __section(__init_sdata(".ref.data"))
+#define __refconst       __section(__init_sdata(".ref.rodata"))
 
 #ifdef MODULE
 #define __exitused
@@ -82,7 +95,7 @@
 #define __exitused  __used
 #endif
 
-#define __exit          __section(".exit.text") __exitused __cold notrace
+#define __exit          __section(__init_stext(".exit.text")) __exitused __cold notrace
 
 #ifdef CONFIG_MEMORY_HOTPLUG
 #define __meminit
@@ -247,8 +260,18 @@ extern struct module __this_module;
 	}							\
 	__ADDRESSABLE(__stub)
 #else
+#ifdef __APPLE__
+/*
+ * Mach-O: ".initcallrootfs.init" would exceed the 16-char section
+ * name limit; drop the ".init" suffix and add the segment. Order is
+ * fixed by arch/lkl/kernel/vmlinux-mach-o.lds.S.
+ */
+#define __initcall_section(__sec, __iid)			\
+	"__DATA," #__sec
+#else
 #define __initcall_section(__sec, __iid)			\
 	#__sec ".init"
+#endif
 
 #define __initcall_stub(fn, __iid, id)	fn
 
@@ -338,7 +361,7 @@ extern const struct obs_kernel_param __setup_start[], __setup_end[];
 	static const char __setup_str_##unique_id[] __initconst		\
 		__aligned(1) = str; 					\
 	static struct obs_kernel_param __setup_##unique_id		\
-		__used __section(".init.setup")				\
+		__used __section(__init_sdata(".init.setup"))				\
 		__aligned(__alignof__(struct obs_kernel_param))		\
 		= { __setup_str_##unique_id, fn, early }
 
@@ -389,7 +412,7 @@ void __init parse_early_options(char *cmdline);
 #endif
 
 /* Data marked not to be saved by software suspend */
-#define __nosavedata __section(".data..nosave")
+#define __nosavedata __section(__init_sdata(".data..nosave"))
 
 #ifdef MODULE
 #define __exit_p(x) x

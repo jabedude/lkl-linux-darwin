@@ -7,12 +7,19 @@
 /* Call a function once. Similar to DO_ONCE(), but does not use jump label
  * patching via static keys.
  */
+/* section for one-shot flags; Mach-O section names need a segment */
+#ifdef __APPLE__
+# define __ONCE_SECTION	"__DATA,.data.once"
+#else
+# define __ONCE_SECTION	".data.once"
+#endif
+
 #define DO_ONCE_LITE(func, ...)						\
 	DO_ONCE_LITE_IF(true, func, ##__VA_ARGS__)
 
 #define __ONCE_LITE_IF(condition)					\
 	({								\
-		static bool __section(".data.once") __already_done;	\
+		static bool __section(__ONCE_SECTION) __already_done;	\
 		bool __ret_cond = !!(condition);			\
 		bool __ret_once = false;				\
 									\

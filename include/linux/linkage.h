@@ -23,10 +23,20 @@
 #endif
 
 #ifndef cond_syscall
+#ifdef __APPLE__
+/*
+ * ld64 cannot merge an ELF-style weak alias with a strong definition
+ * under ld -r; configured-out syscalls are handled instead by weak
+ * references from the LKL syscall table (arch/lkl/kernel/syscalls.c),
+ * which resolve to NULL and yield -ENOSYS at dispatch.
+ */
+#define cond_syscall(x)
+#else
 #define cond_syscall(x)	asm(				\
 	".weak " __stringify(x) "\n\t"			\
 	".set  " __stringify(x) ","			\
 		 __stringify(sys_ni_syscall))
+#endif
 #endif
 
 #ifndef SYSCALL_ALIAS

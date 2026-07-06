@@ -89,8 +89,13 @@
 		name,							\
 		desc							\
 	}
+#ifdef __APPLE__
+/* ELF notes have no Mach-O equivalent; emit nothing */
+#define ELFNOTE(size, name, type, desc)
+#else
 #define ELFNOTE(size, name, type, desc)		\
 	_ELFNOTE(size, name, __LINE__, type, desc)
+#endif
 
 #define ELFNOTE32(name, type, desc) ELFNOTE(32, name, type, desc)
 #define ELFNOTE64(name, type, desc) ELFNOTE(64, name, type, desc)

@@ -101,9 +101,10 @@
  *   gcc: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=108896
  * clang: https://github.com/llvm/llvm-project/pull/76348
  */
-#if __has_attribute(__counted_by__)
+#if __has_attribute(__counted_by__) && !defined(__APPLE__)
 # define __counted_by(member)		__attribute__((__counted_by__(member)))
 #else
+/* Apple clang rejects __typeof__ on arrays carrying __counted_by */
 # define __counted_by(member)
 #endif
 
@@ -417,6 +418,9 @@
  *   gcc: https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html#index-weak-function-attribute
  *   gcc: https://gcc.gnu.org/onlinedocs/gcc/Common-Variable-Attributes.html#index-weak-variable-attribute
  */
+#ifdef __APPLE__
+# undef __weak			/* clang predefines __weak for ObjC GC */
+#endif
 #define __weak                          __attribute__((__weak__))
 
 /*

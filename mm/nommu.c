@@ -207,7 +207,15 @@ void *vmalloc_noprof(unsigned long size)
 }
 EXPORT_SYMBOL(vmalloc_noprof);
 
+#ifdef __APPLE__
+/* no __alias support on Mach-O */
+void *vmalloc_huge_noprof(unsigned long size, gfp_t gfp_mask)
+{
+	return __vmalloc_noprof(size, gfp_mask);
+}
+#else
 void *vmalloc_huge_noprof(unsigned long size, gfp_t gfp_mask) __weak __alias(__vmalloc_noprof);
+#endif
 
 /*
  *	vzalloc - allocate virtually contiguous memory with zero fill

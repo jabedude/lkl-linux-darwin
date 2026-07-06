@@ -38,6 +38,10 @@ extern struct cred init_cred;
 #define INIT_TASK_COMM "swapper"
 
 /* Attach to the thread_info data structure for proper alignment */
+#ifdef __APPLE__
+#define __init_thread_info __section("__DATA,.data..init_thr")
+#else
 #define __init_thread_info __section(".data..init_thread_info")
+#endif
 
 #endif

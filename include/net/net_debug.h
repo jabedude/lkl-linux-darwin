@@ -2,6 +2,7 @@
 #ifndef _LINUX_NET_DEBUG_H
 #define _LINUX_NET_DEBUG_H
 
+#include <linux/once_lite.h>
 #include <linux/bug.h>
 #include <linux/kern_levels.h>
 
@@ -27,7 +28,7 @@ void netdev_info(const struct net_device *dev, const char *format, ...);
 
 #define netdev_level_once(level, dev, fmt, ...)			\
 do {								\
-	static bool __section(".data.once") __print_once;	\
+	static bool __section(__ONCE_SECTION) __print_once;	\
 								\
 	if (!__print_once) {					\
 		__print_once = true;				\

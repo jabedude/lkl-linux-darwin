@@ -82,8 +82,16 @@ static volatile const u8 __cacheline_aligned aes_inv_sbox[] = {
 	0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d,
 };
 
+#ifdef __APPLE__
+/* no __alias support on Mach-O; alias at the assembler level */
+extern const u8 crypto_aes_sbox[256];
+extern const u8 crypto_aes_inv_sbox[256];
+asm(".globl _crypto_aes_sbox\n.set _crypto_aes_sbox, _aes_sbox");
+asm(".globl _crypto_aes_inv_sbox\n.set _crypto_aes_inv_sbox, _aes_inv_sbox");
+#else
 extern const u8 crypto_aes_sbox[256] __alias(aes_sbox);
 extern const u8 crypto_aes_inv_sbox[256] __alias(aes_inv_sbox);
+#endif
 
 EXPORT_SYMBOL(crypto_aes_sbox);
 EXPORT_SYMBOL(crypto_aes_inv_sbox);

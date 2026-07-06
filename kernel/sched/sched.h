@@ -2496,10 +2496,21 @@ static inline void put_prev_set_next_task(struct rq *rq,
  *
  * Also enforce alignment on the instance, not the type, to guarantee layout.
  */
+#ifdef __APPLE__
+/*
+ * Mach-O section specifiers need a segment and a <=16 char section
+ * name; the order of these sections is fixed by the declarations in
+ * arch/lkl/kernel/vmlinux-mach-o.lds.S.
+ */
+#define __SCHED_CLASS_SECTION(name)	"__DATA,.sched." #name
+#else
+#define __SCHED_CLASS_SECTION(name)	"__" #name "_sched_class"
+#endif
+
 #define DEFINE_SCHED_CLASS(name) \
 const struct sched_class name##_sched_class \
 	__aligned(__alignof__(struct sched_class)) \
-	__section("__" #name "_sched_class")
+	__section(__SCHED_CLASS_SECTION(name))
 
 /* Defined in include/asm-generic/vmlinux.lds.h */
 extern struct sched_class __sched_class_highest[];

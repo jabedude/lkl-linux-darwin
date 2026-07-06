@@ -36,9 +36,18 @@ static inline void blake2s_increment_counter(struct blake2s_state *state,
 	state->t[1] += (state->t[0] < inc);
 }
 
+#ifdef __APPLE__
+/* no __alias support on Mach-O (and no arch override on LKL) */
+void blake2s_compress(struct blake2s_state *state, const u8 *block,
+		      size_t nblocks, const u32 inc)
+{
+	blake2s_compress_generic(state, block, nblocks, inc);
+}
+#else
 void blake2s_compress(struct blake2s_state *state, const u8 *block,
 		      size_t nblocks, const u32 inc)
 		      __weak __alias(blake2s_compress_generic);
+#endif
 
 void blake2s_compress_generic(struct blake2s_state *state, const u8 *block,
 			      size_t nblocks, const u32 inc)

@@ -342,10 +342,19 @@ struct ftrace_likely_data {
 #endif
 
 /* Section for code which can't be instrumented at all */
+#ifdef __APPLE__
+/* Mach-O section specifiers need a segment prefix */
+#define __noinstr_section(section)					\
+	noinline notrace \
+	__attribute((__section__("__TEXT," section ",regular,pure_instructions"))) \
+	__no_kcsan __no_sanitize_address __no_profile __no_sanitize_coverage \
+	__no_sanitize_memory __signed_wrap
+#else
 #define __noinstr_section(section)					\
 	noinline notrace __attribute((__section__(section)))		\
 	__no_kcsan __no_sanitize_address __no_profile __no_sanitize_coverage \
 	__no_sanitize_memory __signed_wrap
+#endif
 
 #define noinstr __noinstr_section(".noinstr.text")
 
