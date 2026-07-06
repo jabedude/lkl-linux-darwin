@@ -1,4 +1,4 @@
-POSIX_HOSTS=elf64 elf32
+POSIX_HOSTS=elf64 elf32 mach
 KASAN_HOSTS=elf64-x86-64
 NT_HOSTS=pe
 
@@ -28,6 +28,27 @@ endef
 
 define bsd_host
   $(call set_autoconf_var,BSD,y)
+endef
+
+define macos_host
+  # macOS is a BSD variant as far as the userspace library goes
+  $(call bsd_host)
+  $(call set_autoconf_var,MACHO,y)
+  SOSUF := .dylib
+  # Kernel config deltas for the Mach-O port: no kallsyms (the
+  # scripts/kallsyms link passes aren't wired up for Mach-O), no DWARF
+  # debug info (the Mach-O assembler rejects clang's DWARF5 loclists),
+  # no XFS, no btrfs (RAID6_PQ boot benchmark; later stages revisit).
+  $(call set_kernel_config,KALLSYMS,n)
+  $(call set_kernel_config,KALLSYMS_ALL,n)
+  $(call set_kernel_config,KALLSYMS_USE_DATA_SECTION,n)
+  $(call set_kernel_config,DEBUG_INFO_DWARF4,n)
+  $(call set_kernel_config,DEBUG_INFO_NONE,y)
+  $(call set_kernel_config,XFS_FS,n)
+  $(call set_kernel_config,BTRFS_FS,n)
+  # avmount uses virtio-mmio; PCI would need fixup-table shims
+  $(call set_kernel_config,PCI,n)
+  $(call set_kernel_config,BLK_DEV_NVME,n)
 endef
 
 define arm_host
@@ -71,13 +92,17 @@ endef
 define posix_host
   $(call set_autoconf_var,POSIX,y)
   $(call set_autoconf_var,VIRTIO_NET,y)
-  $(call set_autoconf_var,VIRTIO_NET_FD,y)
+  # fd-based net backends (tap/raw/pipe) are Linux/BSD-only
+  $(if $(filter mach-o-%,$(1)),,$(call set_autoconf_var,VIRTIO_NET_FD,y))
   $(if $(strip $(call find_include,linux/vfio.h)),$(call set_autoconf_var,VFIO_PCI,y))
-  LDFLAGS += -pie -z noexecstack
+  # Apple's linker knows neither -pie (default there) nor -z noexecstack
+  $(if $(filter mach-o-%,$(1)),,LDFLAGS += -pie -z noexecstack)
   CFLAGS += -fPIC -pthread
   SOSUF := .so
-  $(if $(call is_defined,__ANDROID__),$(call android_host),LDLIBS += -lrt -lpthread)
+  $(if $(call is_defined,__ANDROID__),$(call android_host),\
+    $(if $(filter mach-o-%,$(1)),LDLIBS += -lpthread,LDLIBS += -lrt -lpthread))
   $(if $(filter $(1),elf64-x86-64-freebsd),$(call bsd_host))
+  $(if $(filter mach-o-%,$(1)),$(call macos_host))
   $(if $(filter $(1),elf32-littlearm),$(call arm_host))
   $(if $(filter $(1),elf64-littleaarch64),$(call aarch64_host))
   $(if $(filter $(1),elf64-littleriscv),$(call riscv64_host))
@@ -133,7 +158,12 @@ define do_autoconf_gnu
   export AR := $(CROSS_COMPILE)ar
   $(eval LD := $(CROSS_COMPILE)ld)
   $(eval CC := $(CROSS_COMPILE)gcc)
-  $(eval LD_FMT := $(shell $(LD) -r -print-output-format))
+  $(eval LD_FMT := $(shell $(LD) -r -print-output-format 2>/dev/null))
+  # Apple's ld has no -print-output-format; ask objdump instead, the
+  # same way the kernel-side Kconfig detects CONFIG_OUTPUT_FORMAT.
+  $(if $(LD_FMT),,$(eval LD_FMT := $(shell CC="$(CC)" \
+	OBJDUMP=$(CROSS_COMPILE)objdump \
+	$(srctree)/arch/lkl/scripts/cc-objdump-file-format.sh)))
 endef
 
 define llvm_target_to_ld_fmt
@@ -287,7 +317,7 @@ export do_autoconf
 $(OUTPUT)Makefile.conf: Makefile.autoconf
 	$(shell mkdir -p $(OUTPUT)/include)
 	$(shell mkdir -p $(OUTPUT)/tests)
-	$(shell echo -n "" > $(OUTPUT)/include/lkl_autoconf.h)
-	$(shell echo -n "" > $(OUTPUT)/kernel.config)
-	$(shell echo -n "" > $(OUTPUT)/tests/autoconf.sh)
+	$(shell printf "" > $(OUTPUT)/include/lkl_autoconf.h)
+	$(shell printf "" > $(OUTPUT)/kernel.config)
+	$(shell printf "" > $(OUTPUT)/tests/autoconf.sh)
 	@echo "$$do_autoconf" > $(OUTPUT)/Makefile.conf

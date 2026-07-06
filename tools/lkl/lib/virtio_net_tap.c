@@ -17,7 +17,7 @@
 #include <net/if.h>
 #ifdef __linux__
 #include <linux/if_tun.h>
-#elif __FreeBSD__
+#elif defined(__FreeBSD__) || defined(__APPLE__)
 #include <net/if_tun.h>
 #endif
 #include <sys/ioctl.h>
@@ -92,7 +92,7 @@ struct lkl_netdev *lkl_netdev_tap_create(const char *ifname, int offload)
 {
 #ifdef __linux__
 	char *path = "/dev/net/tun";
-#elif __FreeBSD__
+#elif defined(__FreeBSD__) || defined(__APPLE__)
 	char path[32];
 
 	sprintf(path, "/dev/%s", ifname);

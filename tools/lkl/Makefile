@@ -57,9 +57,11 @@ TARGETS += $(tests-y:%=$(OUTPUT)%$(EXESUF))
 TARGETS += $(libs-y:%=$(OUTPUT)%$(SOSUF))
 all: $(TARGETS)
 
-# this workaround is for FreeBSD
+# this workaround is for FreeBSD (and macOS, via brew coreutils)
 bin/stat:
-ifeq ($(LKL_HOST_CONFIG_BSD),y)
+ifeq ($(LKL_HOST_CONFIG_MACHO),y)
+	$(Q)ln -sf `which gstat` bin/stat
+else ifeq ($(LKL_HOST_CONFIG_BSD),y)
 	$(Q)ln -sf `which gnustat` bin/stat
 	$(Q)ln -sf `which gsed` bin/sed
 else

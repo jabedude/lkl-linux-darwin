@@ -31,7 +31,7 @@
 /* Let's see if the host has semaphore.h */
 #include <unistd.h>
 
-#ifdef _POSIX_SEMAPHORES
+#if defined(_POSIX_SEMAPHORES) && (_POSIX_SEMAPHORES + 0) > 0
 #include <semaphore.h>
 /* TODO(pscollins): We don't support fork() for now, but maybe one day
  * we will? */
@@ -50,7 +50,7 @@ struct lkl_mutex {
 };
 
 struct lkl_sem {
-#ifdef _POSIX_SEMAPHORES
+#if defined(_POSIX_SEMAPHORES) && (_POSIX_SEMAPHORES + 0) > 0
 	sem_t sem;
 #else
 	pthread_mutex_t lock;
@@ -88,7 +88,7 @@ static struct lkl_sem *sem_alloc(int count)
 	if (!sem)
 		return NULL;
 
-#ifdef _POSIX_SEMAPHORES
+#if defined(_POSIX_SEMAPHORES) && (_POSIX_SEMAPHORES + 0) > 0
 	if (sem_init(&sem->sem, SHARE_SEM, count) < 0) {
 		lkl_printf("sem_init: %s\n", strerror(errno));
 		free(sem);
@@ -105,7 +105,7 @@ static struct lkl_sem *sem_alloc(int count)
 
 static void sem_free(struct lkl_sem *sem)
 {
-#ifdef _POSIX_SEMAPHORES
+#if defined(_POSIX_SEMAPHORES) && (_POSIX_SEMAPHORES + 0) > 0
 	WARN_UNLESS(sem_destroy(&sem->sem));
 #else
 	WARN_PTHREAD(pthread_cond_destroy(&sem->cond));
@@ -116,7 +116,7 @@ static void sem_free(struct lkl_sem *sem)
 
 static void sem_up(struct lkl_sem *sem)
 {
-#ifdef _POSIX_SEMAPHORES
+#if defined(_POSIX_SEMAPHORES) && (_POSIX_SEMAPHORES + 0) > 0
 	WARN_UNLESS(sem_post(&sem->sem));
 #else
 	WARN_PTHREAD(pthread_mutex_lock(&sem->lock));
@@ -130,7 +130,7 @@ static void sem_up(struct lkl_sem *sem)
 
 static void sem_down(struct lkl_sem *sem)
 {
-#ifdef _POSIX_SEMAPHORES
+#if defined(_POSIX_SEMAPHORES) && (_POSIX_SEMAPHORES + 0) > 0
 	int err;
 
 	do {
@@ -260,6 +260,20 @@ static int thread_equal(lkl_thread_t a, lkl_thread_t b)
 #define pthread_getattr_np pthread_attr_get_np
 #endif
 
+#ifdef __APPLE__
+void *thread_stack(unsigned long *size)
+{
+	pthread_t self = pthread_self();
+	size_t stack_size = pthread_get_stacksize_np(self);
+
+	if (size)
+		*size = stack_size;
+
+	/* Darwin reports the stack top (highest address); callers
+	 * expect the base. */
+	return (char *)pthread_get_stackaddr_np(self) - stack_size;
+}
+#else
 void *thread_stack(unsigned long *size)
 {
 	pthread_attr_t thread_attr;
@@ -279,6 +293,7 @@ void *thread_stack(unsigned long *size)
 
 	return thread_stack;
 }
+#endif
 
 static struct lkl_tls_key *tsd_alloc(void (*destructor)(void *))
 {
@@ -400,6 +415,104 @@ static unsigned long long time_ns(void)
 	return 1e9*ts.tv_sec + ts.tv_nsec;
 }
 
+#ifdef __APPLE__
+/*
+ * Darwin has no POSIX timers; emulate the one-shot timer with a
+ * dedicated thread parked on a condition variable.
+ */
+#include <stdbool.h>
+struct lkl_apple_timer {
+	pthread_t thread;
+	pthread_mutex_t lock;
+	pthread_cond_t cond;
+	bool armed;
+	bool stop;
+	struct timespec deadline;
+	void (*fn)(void);
+};
+
+static void *timer_thread(void *arg)
+{
+	struct lkl_apple_timer *t = arg;
+
+	pthread_mutex_lock(&t->lock);
+	for (;;) {
+		while (!t->armed && !t->stop)
+			pthread_cond_wait(&t->cond, &t->lock);
+		if (t->stop)
+			break;
+
+		int err = pthread_cond_timedwait(&t->cond, &t->lock,
+						 &t->deadline);
+		if (t->stop)
+			break;
+		if (err == ETIMEDOUT && t->armed) {
+			t->armed = false;
+			pthread_mutex_unlock(&t->lock);
+			t->fn();
+			pthread_mutex_lock(&t->lock);
+		}
+		/* signalled: re-check armed/deadline at loop top */
+	}
+	pthread_mutex_unlock(&t->lock);
+	return NULL;
+}
+
+static void *timer_alloc(void (*fn)(void))
+{
+	struct lkl_apple_timer *t = malloc(sizeof(*t));
+
+	if (!t)
+		return NULL;
+
+	t->fn = fn;
+	t->armed = false;
+	t->stop = false;
+	if (WARN_PTHREAD(pthread_mutex_init(&t->lock, NULL)) ||
+	    WARN_PTHREAD(pthread_cond_init(&t->cond, NULL)) ||
+	    WARN_PTHREAD(pthread_create(&t->thread, NULL, timer_thread, t))) {
+		free(t);
+		return NULL;
+	}
+
+	return t;
+}
+
+static int timer_set_oneshot(void *_timer, unsigned long ns)
+{
+	struct lkl_apple_timer *t = _timer;
+	struct timeval now;
+
+	gettimeofday(&now, NULL);
+
+	pthread_mutex_lock(&t->lock);
+	t->deadline.tv_sec = now.tv_sec + ns / 1000000000;
+	t->deadline.tv_nsec = now.tv_usec * 1000 + ns % 1000000000;
+	if (t->deadline.tv_nsec >= 1000000000) {
+		t->deadline.tv_sec++;
+		t->deadline.tv_nsec -= 1000000000;
+	}
+	t->armed = true;
+	pthread_cond_signal(&t->cond);
+	pthread_mutex_unlock(&t->lock);
+
+	return 0;
+}
+
+static void timer_free(void *_timer)
+{
+	struct lkl_apple_timer *t = _timer;
+
+	pthread_mutex_lock(&t->lock);
+	t->stop = true;
+	pthread_cond_signal(&t->cond);
+	pthread_mutex_unlock(&t->lock);
+	pthread_join(t->thread, NULL);
+	pthread_cond_destroy(&t->cond);
+	pthread_mutex_destroy(&t->lock);
+	free(t);
+}
+#else
 static void lkl_timer_callback(union sigval sv)
 {
 	void (*fn)(void) = sv.sival_ptr;
@@ -445,6 +558,7 @@ static void timer_free(void *_timer)
 
 	timer_delete(timer);
 }
+#endif /* __APPLE__ */
 
 static void panic(void)
 {
@@ -493,6 +607,12 @@ static inline int get_prot(enum lkl_prot lkl_prot)
 #ifndef MAP_FIXED_NOREPLACE
 #define MAP_FIXED_NOREPLACE 0
 #endif
+#endif
+
+#ifndef MAP_FIXED_NOREPLACE
+/* Darwin: no MAP_FIXED_NOREPLACE; the caller already verifies the
+ * returned address, so a plain hint gives the same semantics. */
+#define MAP_FIXED_NOREPLACE 0
 #endif
 
 static void *lkl_mmap(void *addr, unsigned long size, enum lkl_prot prot)
