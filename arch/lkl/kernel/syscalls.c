@@ -21,7 +21,30 @@ static asmlinkage long sys_virtio_mmio_device_add(long base, long size,
 
 static asmlinkage long sys_new_thread_group_leader(void);
 
-typedef long (*syscall_handler_t)(long arg1, ...);
+/*
+ * Must be a fixed-arity prototype, not (long, ...): on the Apple ARM64
+ * ABI variadic args are passed on the stack while the real syscall
+ * handlers read args from registers x0-x5, so a variadic cast delivers
+ * only arg1 correctly. (Harmless on x86-64 SysV, where the first 6
+ * variadic and fixed args share the same registers.)
+ */
+typedef long (*syscall_handler_t)(long arg1, long arg2, long arg3,
+				  long arg4, long arg5, long arg6);
+
+#ifdef __APPLE__
+/*
+ * Mach-O has no ELF weak-alias fallbacks for configured-out syscalls
+ * (see cond_syscall in linux/linkage.h): mark every table entry as a
+ * weak reference; missing ones resolve to NULL and run_syscall turns
+ * them into -ENOSYS.
+ */
+#undef __SYSCALL
+#define __SYSCALL(nr, sym) asm(".weak_reference _" #sym);
+#include <asm/unistd.h>
+#if __BITS_PER_LONG == 32
+#include <asm/unistd_32.h>
+#endif
+#endif
 
 #undef __SYSCALL
 #define __SYSCALL(nr, sym)[nr] = sym,
@@ -41,6 +64,9 @@ static long run_syscall(long no, long *params)
 	syscall_handler_t handler = (syscall_handler_t)syscall_table[no];
 
 	if (no < 0 || no >= __NR_syscalls)
+		return -ENOSYS;
+
+	if (!handler)
 		return -ENOSYS;
 
 	ret = handler(params[0], params[1], params[2], params[3], params[4],

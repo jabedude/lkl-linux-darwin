@@ -391,6 +391,18 @@ quiet_cmd_ar_builtin = AR      $@
 	$(if $(real-prereqs), printf "$(obj)/%s " $(patsubst $(obj)/%,%,$(real-prereqs)) | xargs) \
 	$(AR) cDPrST $@
 
+# Mach-O: Apple's linker reads neither GNU thin archives nor
+# --whole-archive; produce built-in.a as an incrementally linked
+# object instead so every member is always included downstream.
+# Directories with no objects get an empty object file.
+ifneq ($(findstring mach-o,$(CONFIG_OUTPUT_FORMAT)),)
+quiet_cmd_ar_builtin = LD      $@
+      cmd_ar_builtin = rm -f $@; \
+	$(if $(real-prereqs), \
+		$(LD) -r $(LKL_MACHO_LDFLAGS) -o $@ $(real-prereqs), \
+		printf '' | $(CC) -x c -c -o $@ -)
+endif
+
 $(obj)/built-in.a: $(real-obj-y) FORCE
 	$(call if_changed,ar_builtin)
 

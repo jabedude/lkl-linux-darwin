@@ -36,6 +36,10 @@ is_enabled() {
 	grep -q "^$1=y" include/config/auto.conf
 }
 
+is_macho() {
+	grep -q '^CONFIG_OUTPUT_FORMAT="\{0,1\}mach-o' include/config/auto.conf
+}
+
 # Nice output in kbuild format
 # Will be supressed by "make -s"
 info()
@@ -84,6 +88,19 @@ vmlinux_link()
 		ld="${LD}"
 		ldflags="${KBUILD_LDFLAGS} ${LDFLAGS_vmlinux}"
 		ldlibs=
+	fi
+
+	if is_macho; then
+		# Apple's ld64: no linker scripts, no --whole-archive.
+		# vmlinux.a is an incrementally linked object (whole
+		# semantics implicit); the assembled vmlinux-mach-o.o
+		# stands in for the linker script and must come first to
+		# fix section order. -alias provides jiffies = jiffies_64.
+		${ld} ${ldflags} ${LKL_MACHO_LDFLAGS} -o ${output}	\
+			-alias _jiffies_64 _jiffies			\
+			arch/lkl/kernel/vmlinux-mach-o.o		\
+			${objs} ${libs} ${kallsymso}
+		return
 	fi
 
 	ldflags="${ldflags} ${wl}--script=${objtree}/${KBUILD_LDS}"

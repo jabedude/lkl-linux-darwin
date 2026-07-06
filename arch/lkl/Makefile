@@ -6,6 +6,20 @@ exec_format = $(firstword $(subst -, ,$(CONFIG_OUTPUT_FORMAT)))
 
 ifneq (,$(filter elf64 elf32,$(exec_format)))
 KBUILD_CFLAGS += -fPIC
+else ifneq (,$(findstring mach-o,$(CONFIG_OUTPUT_FORMAT)))
+KBUILD_CFLAGS += -fPIC
+# Mach-O section specifiers need segment,section pairs; wrapper
+# headers rewrite the ELF-only section names used by generic code.
+LINUXINCLUDE := -I $(srctree)/arch/lkl/include/mach $(LINUXINCLUDE)
+MACHO_FORMAT := y
+export MACHO_FORMAT
+# Apple's ld-prime judges input files by extension: our built-in.a
+# files are really Mach-O objects, so state arch/platform explicitly
+# for every ld -r step.
+LKL_MACHO_SDKVER := $(shell xcrun --sdk macosx --show-sdk-version)
+LKL_MACHO_LDFLAGS := -arch $(shell uname -m) \
+	-platform_version macos 11.0 $(LKL_MACHO_SDKVER)
+export LKL_MACHO_LDFLAGS
 else ifneq (,$(filter pe,$(exec_format)))
 ifneq ($(CONFIG_OUTPUT_FORMAT),pe-x86-64)
 prefix=_
@@ -87,6 +101,30 @@ all: lkl.o arch/lkl/include/generated/uapi/asm/syscall_defs.h
 # making it miss real vmlinux content changes). Instead, write to a tmp file
 # and cmp before replacing, so $@'s mtime is preserved on no-op rebuilds and
 # downstream consumers (e.g. tools/lkl/liblkl.a) are not relinked needlessly.
+ifeq ($(MACHO_FORMAT),y)
+# GNU objcopy corrupts the Mach-O __compact_unwind section; use native
+# ld -r with an exported-symbols list for the same localization effect.
+# lkl_bug/lkl_printf are provided by the host library, i.e. undefined
+# here, and ld64 refuses to export undefined symbols.
+# Second pass: syscalls compiled out of the kernel have no ELF-style
+# weak alias on Mach-O (cond_syscall is a no-op); collect the table's
+# leftover undefined _sys_* symbols and alias them to a generated
+# -ENOSYS stub, then localize everything but the entry points.
+quiet_cmd_link_lkl = LD      $@
+      cmd_link_lkl = printf '_%s\n' \
+                     $(filter-out lkl_bug lkl_printf,$(LKL_ENTRY_POINTS)) \
+                     > $@.exports && \
+                     $(LD) -r $(LKL_MACHO_LDFLAGS) vmlinux -o $@.tmp && \
+                     { printf '\t.section __TEXT,__text,regular,pure_instructions\n_lkl_macho_ni_syscall:\n\tmov x0, \#-38\n\tret\n'; \
+                       nm -u $@.tmp | sed -n 's/^\(_sys_.*\)/.globl \1\n.set \1, _lkl_macho_ni_syscall/p'; } \
+                     > $@.stubs.s && \
+                     $(CC) -c -o $@.stubs.o $@.stubs.s && \
+                     $(LD) -r $(LKL_MACHO_LDFLAGS) $@.tmp $@.stubs.o \
+                           -o $@.new -exported_symbols_list $@.exports && \
+                     rm -f $@.tmp && \
+                     { if cmp -s $@.new $@; then rm -f $@.new; \
+                       else mv -f $@.new $@; fi; }
+else
 quiet_cmd_link_lkl = OBJCOPY $@
       cmd_link_lkl = $(OBJCOPY) $(if $(KEEP_EH_FRAMES),,-R .eh_frame) \
                      -R .syscall_defs \
@@ -94,13 +132,21 @@ quiet_cmd_link_lkl = OBJCOPY $@
                      --prefix-symbols=$(prefix) $< $@.new && \
                      { if cmp -s $@.new $@; then rm -f $@.new; \
                        else mv -f $@.new $@; fi; }
+endif
 
 lkl.o: vmlinux
 	$(call cmd,link_lkl)
 
+# GNU objcopy names Mach-O sections "<segment>.<section>"
+ifeq ($(MACHO_FORMAT),y)
+SYSCALL_DEFS_SECTION := __TEXT..syscall_defs
+else
+SYSCALL_DEFS_SECTION := .syscall_defs
+endif
+
 quiet_cmd_gen_syscall_defs = OBJCOPY $@
-      cmd_gen_syscall_defs = $(OBJCOPY) -j .syscall_defs -O binary \
-                             --set-section-flags .syscall_defs=alloc $< $@.raw && \
+      cmd_gen_syscall_defs = $(OBJCOPY) -j $(SYSCALL_DEFS_SECTION) -O binary \
+                             --set-section-flags $(SYSCALL_DEFS_SECTION)=alloc $< $@.raw && \
                              sed 's/\x0//g' $@.raw > $@.new && rm -f $@.raw && \
                              { if cmp -s $@.new $@; then rm -f $@.new; \
                                else mv -f $@.new $@; fi; }

@@ -21,6 +21,15 @@ get_canonical_version()
 
 orig_args="$@"
 
+# Apple's ld64 understands neither --version nor GNU/LLD semantics;
+# report it under its own name (used by the LKL Mach-O host port).
+if LC_ALL=C "$@" -v 2>&1 | grep -q 'PROJECT:ld'; then
+	version=$(LC_ALL=C "$@" -v 2>&1 |
+		sed -n 's/.*PROJECT:ld-\([0-9.]*\).*/\1/p')
+	echo ld64 $(get_canonical_version ${version%%[!0-9.]*})
+	exit 0
+fi
+
 # Get the first line of the --version output.
 IFS='
 '

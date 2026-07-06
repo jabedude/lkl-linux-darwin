@@ -56,6 +56,16 @@ quiet_cmd_ld_vmlinux.o = LD      $@
 	--start-group $(KBUILD_VMLINUX_LIBS) --end-group \
 	$(cmd_objtool)
 
+# Mach-O: vmlinux.a is an incrementally linked object (whole-archive
+# semantics are implicit) and Apple's ld64 lacks the GNU grouping
+# options.
+ifneq ($(findstring mach-o,$(CONFIG_OUTPUT_FORMAT)),)
+quiet_cmd_ld_vmlinux.o = LD      $@
+      cmd_ld_vmlinux.o = \
+	$(LD) ${KBUILD_LDFLAGS} $(LKL_MACHO_LDFLAGS) -r -o $@ \
+	vmlinux.a $(KBUILD_VMLINUX_LIBS)
+endif
+
 define rule_ld_vmlinux.o
 	$(call cmd_and_savecmd,ld_vmlinux.o)
 	$(call cmd,gen_objtooldep)
@@ -69,7 +79,12 @@ targets += vmlinux.o
 # module.builtin.modinfo
 # ---------------------------------------------------------------------------
 
+# GNU objcopy names Mach-O sections "<segment>.<section>"
+ifneq ($(findstring mach-o,$(CONFIG_OUTPUT_FORMAT)),)
+OBJCOPYFLAGS_modules.builtin.modinfo := -j __DATA..modinfo -O binary
+else
 OBJCOPYFLAGS_modules.builtin.modinfo := -j .modinfo -O binary
+endif
 
 targets += modules.builtin.modinfo
 modules.builtin.modinfo: vmlinux.o FORCE

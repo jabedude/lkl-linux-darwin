@@ -1032,8 +1032,11 @@ KBUILD_AFLAGS   += $(KAFLAGS)
 KBUILD_CFLAGS   += $(KCFLAGS)
 KBUILD_RUSTFLAGS += $(KRUSTFLAGS)
 
+# Apple's ld64 has no --build-id
+ifeq ($(findstring mach-o,$(CONFIG_OUTPUT_FORMAT)),)
 KBUILD_LDFLAGS_MODULE += --build-id=sha1
 LDFLAGS_vmlinux += --build-id=sha1
+endif
 
 ifeq ($(findstring elf,$(if $(CONFIG_OUTPUT_FORMAT),$(CONFIG_OUTPUT_FORMAT),elf)),elf)
 KBUILD_LDFLAGS	+= -z noexecstack
@@ -1139,6 +1142,15 @@ quiet_cmd_ar_vmlinux.a = AR      $@
 	rm -f $@; \
 	$(AR) cDPrST $@ $(KBUILD_VMLINUX_OBJS); \
 	$(AR) mPiT $$($(AR) t $@ | sed -n 1p) $@ $$($(AR) t $@ | grep -F -f $(srctree)/scripts/head-object-list.txt)
+
+# Mach-O: the built-in.a members are already incrementally linked
+# objects (see scripts/Makefile.build); merge them the same way. LKL
+# has no head objects to reorder.
+ifneq ($(findstring mach-o,$(CONFIG_OUTPUT_FORMAT)),)
+quiet_cmd_ar_vmlinux.a = LD      $@
+      cmd_ar_vmlinux.a = rm -f $@; \
+	$(LD) -r $(LKL_MACHO_LDFLAGS) -o $@ $(KBUILD_VMLINUX_OBJS)
+endif
 
 targets += vmlinux.a
 vmlinux.a: $(KBUILD_VMLINUX_OBJS) scripts/head-object-list.txt FORCE

@@ -14,7 +14,9 @@ config LKL
 	select GENERIC_STRNCPY_FROM_USER
 	select GENERIC_STRNLEN_USER
 	select HAVE_ARCH_KASAN
-	select TRACING
+	# Tracepoints rely on ELF-only section machinery (__tracepoints,
+	# __tracepoint_str, _ftrace_events, ...) not shimmed on Mach-O
+	select TRACING if OUTPUT_FORMAT != "mach-o-arm64"
 
 config LKL_FUZZING
 	bool "LLVM fuzzing instrumentation"
@@ -49,6 +51,7 @@ config PHYS_ADDR_T_64BIT
 config 64BIT
 	bool "64bit kernel"
 	default y if OUTPUT_FORMAT = "pe-x86-64"
+	default y if OUTPUT_FORMAT = "mach-o-arm64"
 	default $(success,$(srctree)/arch/lkl/scripts/cc-objdump-file-format.sh|grep -q '^elf64-') if OUTPUT_FORMAT != "pe-x86-64"
 
 config MMU

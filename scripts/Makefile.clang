@@ -12,6 +12,10 @@ CLANG_TARGET_FLAGS_riscv	:= riscv64-linux-gnu
 CLANG_TARGET_FLAGS_s390		:= s390x-linux-gnu
 CLANG_TARGET_FLAGS_x86		:= x86_64-linux-gnu
 CLANG_TARGET_FLAGS_um		:= $(CLANG_TARGET_FLAGS_$(SUBARCH))
+# LKL builds for the host; on Apple platforms use clang's native target
+ifeq ($(SRCARCH)-$(shell uname -s),lkl-Darwin)
+CLANG_TARGET_FLAGS_lkl		:= $(shell $(CC) -print-target-triple)
+endif
 CLANG_TARGET_FLAGS		:= $(CLANG_TARGET_FLAGS_$(SRCARCH))
 
 ifeq ($(CLANG_TARGET_FLAGS),)
