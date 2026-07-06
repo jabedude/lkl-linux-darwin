@@ -1,0 +1,186 @@
+Phase 1 plan: forward-port to modern LKL (kernel 6.12)
+=======================================================
+
+Context: the lkl-mach-o-arm64 branch (this tree) revived the 2019
+Mach-O host port on Apple Silicon; all 35 boot tests and all 10 ext4
+disk tests pass (macOS 15 arm64, Xcode clang 17). See
+Documentation/lkl.txt "About this fork". This document plans the next
+phase.
+
+
+Goal and exit criteria
+----------------------
+
+Reproduce everything the 4.19 revival achieved, on a maintained
+kernel base. Phase 1 is done when:
+
+1. An lkl-darwin branch on top of lkl/linux master (kernel 6.12)
+   builds natively for arm64 Mach-O with stock Xcode clang.
+2. tests/boot and tests/disk are green for ext4 AND ntfs3 (the driver
+   that motivated the project; it does not exist in 4.19).
+3. CI runs build + tests on every push (macOS arm64 job, plus a Linux
+   job proving ELF hosts stay unbroken).
+4. The patch series is organized into logical, upstream-discussable
+   commits, and Tazaki / lkl/linux issue #345 have been shown the
+   results.
+
+Non-goals for Phase 1: the mount frontend (Phase 2), btrfs/XFS,
+SMP, performance work.
+
+
+Workstream A - base, config strategy, community (first weekend)
+----------------------------------------------------------------
+
+* Fork lkl/linux master; branch lkl-darwin. Keep the 4.19 fork as the
+  reference implementation.
+* Post the current results early: comment on lkl/linux#345 and email
+  Tazaki, before the port starts, not after - input from upstream may
+  reshape it, and the Dec 2024 commenter on #345 was attempting
+  exactly this port.
+* Upstream the universal fixes immediately as small PRs independent
+  of Darwin support: the variadic syscall-table cast (latent UB on
+  every host; only the x86-64 ABI hides it) and a __main__ guard for
+  headers_install.py. Every fix that lands upstream is one we stop
+  carrying.
+* Config strategy: start minimal (KALLSYMS, JUMP_LABEL, FTRACE,
+  RAID6_PQ, btrfs, XFS all off; DEBUG_INFO off or DWARF4). Every
+  disabled feature is ELF-isms we do not have to shadow yet.
+  Re-enable incrementally once booting; each re-enable is a small,
+  bisectable step.
+
+
+Workstream B - re-derive the six 4.19 fixes
+-------------------------------------------
+
+* DWARF 5 assembler failure -> try CONFIG_DEBUG_INFO_DWARF4 first
+  (debug info is worth having); fall back to off.
+* ';' is a comment character on arm64 Mach-O -> same tr ';' '\n'
+  recipe, but vmlinux-mach-o.lds.S must be regenerated against 6.12's
+  vmlinux.lds.h (the biggest single task; see Workstream C).
+* GNU objcopy corrupts __compact_unwind -> same fix: native
+  ld -r -exported_symbols_list; the entry-point list may grow.
+* mach-o-linker.o stubs -> likely unnecessary on 6.12 + clang 17;
+  verify and drop.
+* Variadic syscall-table ABI bug -> should arrive via the upstream PR
+  (Workstream A); otherwise reapply.
+* headers_install.py spawn hang -> same; upstream PR preferred.
+
+
+Workstream C - new-in-6.12 ELF-ism hazards (the real unknowns)
+--------------------------------------------------------------
+
+In rough order of likelihood of biting:
+
+* Initcall mechanics: do NOT enable
+  CONFIG_HAVE_ARCH_PREL32_RELOCATIONS; keep absolute initcall
+  pointers so the Mach-O section trick keeps working.
+* New linker-script-collected sections: __ksymtab namespaces,
+  __dyndbg (config off), .printk_index (off), __bug_table format
+  changes, __tracepoints (off), .static_call_sites (verify x86-only),
+  __patchable_function_entries (ftrace, off).
+* kbuild: LLVM=1 is first-class now (helps); verify arch/lkl escapes
+  objtool; CONFIG_WERROR off; GNU Make floor rose - macOS's make
+  3.81 may finally be too old (budget for brew make/gmake).
+* LKL's own evolution: the host-ops API changed since 4.19, so the
+  Darwin posix-host.c support needs updating, not copying. Check
+  whether the uml-lkl upstreaming direction moved files.
+
+Method: identical to the 4.19 revival - build, hit the wall, read the
+assembler/linker error, fix, repeat. The six known signatures cover
+the classes; expect a few new members of each class.
+
+
+Workstream D - correctness hardening (carry the warts no further)
+-----------------------------------------------------------------
+
+* Fix jiffies properly: ld64 supports -alias _jiffies_64 _jiffies, a
+  true link-time alias replacing the zero-size-label hack that points
+  timer readers at unrelated memory. One flag on the lkl.o link.
+* ABI audit: sweep arch/lkl and tools/lkl for other function-pointer
+  casts that change arity or variadicity; the syscall table will not
+  be the only x86-ism of this kind. Check irq handler and host-ops
+  callback casts.
+* 16K pages: confirm LKL's internal 4K PAGE_SIZE against the host's
+  16K pages for every host-op touching mmap (the disk path uses
+  pread/pwrite, so exposure should be minimal - verify, don't
+  assume).
+
+
+Workstream E - filesystems beyond ext4
+--------------------------------------
+
+* ntfs3 (the headline): CONFIG_NTFS3_FS; format test images with
+  brew's ntfs-3g (mkntfs); add a disk-test variant; also test
+  Windows-formatted images when available.
+* vfat/exfat: cheap to enable; macOS formats test images natively,
+  and can mount the same images, enabling differential testing
+  (write via LKL, read via macOS, compare).
+* Deeper validation, structured as reusable scripts (the seed of the
+  Phase 2 harness): a small fsx run against an LKL-mounted image and
+  a checksum-tree differential test.
+
+
+Workstream F - CI and repo hygiene
+----------------------------------
+
+* GitHub Actions: macos-15 (arm64) job with brew deps + shim dir,
+  build, run boot and disk tests (ext4 + ntfs3); ubuntu job with a
+  stock LKL build + boot test. Cache the kernel build dir keyed on
+  config+source hash.
+* Reorganize commits into a reviewable series (kbuild mach-o support;
+  darwin host ops; mach-o section/boundary shim; ...), the shape
+  upstream would want even if upstreaming is months away.
+
+
+Workstream G - optional early demo
+----------------------------------
+
+lklfuse already builds. With brew's fuse-t there is a realistic shot
+at an ext4 image mounted in Finder using the existing 4.19 branch,
+before Phase 1 starts. Worth one timeboxed evening: it produces a
+screenshot-grade artifact for the README and #345, and derisks the
+Phase 2 frontend assumptions (FUSE-T behavior, Finder ._ traffic).
+Abandon without guilt if FUSE-T fights back.
+
+
+Sequencing and gates
+--------------------
+
+1. Gate 1 - first boot (est. 2-4 weekends): 6.12 tree, minimal
+   config, boot banner on arm64. Same go/no-go logic as before: if
+   this exceeds about a month of calendar time, reassess against an
+   intermediate 5.15 LTS base (which already has ntfs3).
+2. Gate 2 - parity (+1-2 weekends): 35/35 boot tests, ext4 disk tests
+   green, jiffies fixed properly.
+3. Gate 3 - ntfs3 (+1 weekend): NTFS disk tests green; differential
+   read tests against macOS-formatted FAT/exFAT images.
+4. Gate 4 - sustainability (+1 weekend): CI green on both OSes, patch
+   series organized, docs updated, #345/Tazaki engaged.
+
+Total estimate: 4-8 part-time weekends, risk front-loaded in Gate 1.
+
+
+Risks
+-----
+
+* 6.12's ELF-ism surface bigger than expected -> minimal-config
+  strategy; 5.15 LTS fallback base still delivers ntfs3.
+* Upstream LKL master unstable on any host -> pin to the last commit
+  its own CI passed; check CI status before forking.
+* Solo-maintainer fatigue -> community outreach is Workstream A, not
+  an afterthought; the variadic-bug PR is an hour of work that builds
+  credibility.
+* Apple toolchain drift (new Xcode) -> CI catches it; record exact
+  Xcode/clang versions in docs.
+
+
+Phase 2 preview (orientation, not commitment)
+---------------------------------------------
+
+With Phase 1 done, the frontend decision becomes live: FSKit module
+(most native, macOS 15.4+), in-process NFSv3 server (works
+everywhere, most control), or lklfuse + FUSE-T (fastest, third-party
+dependency). The Workstream G demo will have generated real data for
+that choice. Phase 2 also inherits the question that matters most for
+a disk-mounting tool: crash-consistency and fuzzed-image testing
+before anyone mounts a disk they care about read-write.

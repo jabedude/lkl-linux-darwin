@@ -1,0 +1,154 @@
+Phase 2 plan: in-process NFSv3 mount frontend (4.19 base)
+=========================================================
+
+Context: the lkl-mach-o-arm64 branch boots kernel 4.19 on macOS
+15/arm64 with all 35 boot tests and all 10 ext4 disk tests green.
+Decision: do NOT forward-port to 6.12 now (the earlier
+lkl-darwin-plan.txt sequencing is superseded); instead build the
+thing the kernel work was for - mounting filesystems on macOS -
+on the tree we have. NTFS is deferred (4.19 predates ntfs3; the
+legacy driver is read-only and not worth anchoring the phase on).
+Target filesystems: ext4 first (test-proven), vfat second (macOS
+can format/mount the same images, enabling differential tests).
+
+Frontend decision: an in-process NFSv3 server (in the style of the
+Rust nfsserve crate), not FUSE. Rationale: zero third-party mount
+software - macOS's stock NFS client does the mounting; no kext, no
+system extension, no FUSE-T dependency. This is the same trick
+FUSE-T itself uses internally, with the middleman removed.
+
+
+Architecture
+------------
+
+One daemon, working name avmount:
+
+  Finder / any app
+    -> macOS NFS client (mount_nfs, in the box since forever)
+    -> TCP 127.0.0.1:<port>  (NFSv3 + MOUNT protocol, nfsserve)
+    -> NFSFileSystem trait impl (Rust)
+    -> lkl_sys_* syscalls (openat/getdents64/read/write/fsync...)
+    -> ext4 driver inside LKL (liblkl.a, the kernel we boot today)
+    -> lkl disk host-ops -> pread/pwrite on the image file
+
+The daemon links liblkl.a directly. The existing C test binaries
+link it with a plain cc/ld64 link (tools/lkl/Makefile rule
+"%$(EXESUF): %-in.o liblkl.a"), so a Rust build.rs doing the same
+is expected to Just Work; the Mach-O section shims live inside the
+archive already.
+
+Mount command (what the daemon runs for you):
+  mount_nfs -o nolocks,vers=3,tcp,port=P,mountport=P,soft \
+      localhost:/ <mountpoint>
+
+
+Workstream A - Rust/LKL binding (the foundation)
+------------------------------------------------
+
+* Cargo project at avmount/ (sibling of the kernel tree); bindgen over
+  tools/lkl/include/lkl.h + lkl_host.h; build.rs links
+  ../liblkl.a.
+* Milestone (Gate 1): a Rust smoke test that boots LKL, mounts an
+  ext4 image, readdirs the root and prints entries - the disk.c
+  test rewritten in Rust. This flushes out the two real unknowns
+  at once: the ld64 link from rustc, and LKL host-thread
+  registration under Rust-created threads.
+* Threading rule from day one: LKL syscalls only ever run on a
+  dedicated blocking thread pool (tokio spawn_blocking or an
+  explicit N-thread syscall pool), never on async worker threads.
+  Every thread that enters LKL must be one LKL has registered.
+
+
+Workstream B - read-only server
+-------------------------------
+
+* Implement the read side of the NFSFileSystem trait: lookup,
+  getattr, access, readdir/readdirplus, read, readlink.
+* fileid = st_ino from lkl stat (u64, stable in ext4). Keep an
+  inode -> open-fd/path table with eviction; nfsserve's demo
+  mirror-fs is the reference implementation shape.
+* Check nfsserve crate health first (xetdata's maintenance has
+  wound down); pin a rev, and be ready to vendor/fork - it is a
+  small Apache-licensed codebase.
+* Milestone (Gate 2): image browsable read-only in Finder;
+  `diff -r` of the mount against a cptofs extraction is clean.
+
+
+Workstream C - read-write
+-------------------------
+
+* create/mkdir/write/setattr/rename/remove/symlink/link.
+* Map NFSv3 stable writes and COMMIT to lkl_sys_fsync/fdatasync
+  honestly - the macOS client's data-integrity expectations hang
+  off this; lying here turns kill -9 into corruption.
+* Clean shutdown path: unmount from macOS, then lkl_sys_umount,
+  then lkl halt. Gate: e2fsck -f on the image is clean after every
+  test run. That fsck is the phase's definition of "works".
+* Expect AppleDouble ._ files and .DS_Store over NFS; harmless on
+  ext4, but tests must account for them.
+
+
+Workstream D - validation harness
+---------------------------------
+
+* Fix the cptofs/fs2tar build: they are gated on libarchive
+  (archive.h); brew install libarchive is keg-only, so
+  Makefile.autoconf needs the include path. Small, do first -
+  cptofs is both a milestone check and the differential-test
+  oracle.
+* Differential test: populate a tree over the NFS mount, extract
+  with cptofs, compare checksum trees. For vfat, run the same
+  image through macOS's own mounter in both directions.
+* fsx against a file on the mount; a metadata torture script
+  (rename/symlink/utimes churn) alongside.
+* Crash-consistency smoke: kill -9 avmount mid-write, restart,
+  fsck, remount; document the observed semantics (journal replay;
+  loss window = uncommitted writes). Structure all of this as
+  scripts under tools/lkl/tests/ in the existing tap13 shape.
+
+
+Workstream E - packaging and UX
+-------------------------------
+
+* CLI: avmount <image> [mountpoint] - picks a free port, serves,
+  invokes mount_nfs itself, unmounts and halts LKL on SIGINT.
+* Root story: mount_nfs needs root by default. Phase answer:
+  document sudo; a setuid helper or launchd service is a later
+  problem.
+* Flags: -t ext4|vfat, -ro, -part N - mirroring lklfuse's options
+  so the two frontends stay interchangeable.
+
+
+Sequencing and gates
+--------------------
+
+1. Gate 1 - Rust smoke (est. 1 weekend): boot + mount + readdir
+   from Rust. Highest-risk items (linking, threads) die here.
+2. Gate 2 - Finder browse (1-2 weekends): read-only mount usable
+   in Finder, differential read test green.
+3. Gate 3 - read-write (1-2 weekends): RW mount, fsx clean, fsck
+   clean after every unmount and after crash tests.
+4. Gate 4 - polish (1 weekend): CLI UX, vfat variant, docs,
+   scripts merged into the test suite.
+
+Total estimate: 4-6 part-time weekends, risk front-loaded in
+Gate 1, exactly like last time.
+
+
+Risks
+-----
+
+* nfsserve unmaintained or macOS-client quirks (READDIRPLUS
+  behavior, no NLM - hence nolocks): mitigated by pinning/vendoring
+  and by FUSE-T's existence proof that macOS-over-localhost-NFS is
+  viable for exactly this job.
+* Rust x LKL thread/TLS surprises: Gate 1 exists to surface them
+  in a 200-line program instead of a server.
+* macOS NFS client caching masking bugs in tests: pin actimeo/
+  noac-ish options in test mounts, not in normal use.
+* Performance: single-CPU LKL over localhost TCP will not win
+  benchmarks; explicitly out of scope - correctness (fsck, fsx)
+  is the bar.
+* 16K host pages: the NFS path adds no mmap of guest memory; the
+  image I/O stays pread/pwrite, same exposure as today (none
+  observed).
