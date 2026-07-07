@@ -18,7 +18,7 @@ export MACHO_FORMAT
 # for every ld -r step.
 LKL_MACHO_SDKVER := $(shell xcrun --sdk macosx --show-sdk-version)
 LKL_MACHO_LDFLAGS := -arch $(shell uname -m) \
-	-platform_version macos 11.0 $(LKL_MACHO_SDKVER)
+	-platform_version macos $(shell sw_vers -productVersion) $(LKL_MACHO_SDKVER)
 export LKL_MACHO_LDFLAGS
 else ifneq (,$(filter pe,$(exec_format)))
 ifneq ($(CONFIG_OUTPUT_FORMAT),pe-x86-64)

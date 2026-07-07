@@ -38,14 +38,16 @@ define macos_host
   # Kernel config deltas for the Mach-O port: no kallsyms (the
   # scripts/kallsyms link passes aren't wired up for Mach-O), no DWARF
   # debug info (the Mach-O assembler rejects clang's DWARF5 loclists),
-  # no XFS, no btrfs (RAID6_PQ boot benchmark; later stages revisit).
+  # no XFS. btrfs stays enabled, but skip RAID6_PQ's boot-time
+  # benchmark (~9s of CPU per boot; the priority-selected algorithm
+  # is fine for a filesystem bridge).
   $(call set_kernel_config,KALLSYMS,n)
   $(call set_kernel_config,KALLSYMS_ALL,n)
   $(call set_kernel_config,KALLSYMS_USE_DATA_SECTION,n)
   $(call set_kernel_config,DEBUG_INFO_DWARF4,n)
   $(call set_kernel_config,DEBUG_INFO_NONE,y)
   $(call set_kernel_config,XFS_FS,n)
-  $(call set_kernel_config,BTRFS_FS,n)
+  $(call set_kernel_config,RAID6_PQ_BENCHMARK,n)
   # avmount uses virtio-mmio; PCI would need fixup-table shims
   $(call set_kernel_config,PCI,n)
   $(call set_kernel_config,BLK_DEV_NVME,n)
