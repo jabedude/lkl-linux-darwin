@@ -305,6 +305,34 @@ long lkl_umount_blkdev(unsigned int dev, int flags, long timeout_ms)
 	if (err)
 		return err;
 
+	/*
+	 * umount detaches the mount, but the final mntput is deferred:
+	 * LKL host tasks run with PF_KTHREAD, so cleanup_mnt goes to
+	 * delayed_mntput_work (one jiffy out) instead of task work. The
+	 * superblock teardown - and with it the tail of writeback and
+	 * put_super - races a subsequent lkl_sys_halt() and loses. Wait
+	 * until the filesystem actually releases the block device:
+	 * opening it O_EXCL conflicts with the fs holder until
+	 * put_super, so success means the teardown completed.
+	 */
+	do {
+		struct __lkl__kernel_timespec ts = {
+			.tv_sec = 0,
+			.tv_nsec = 10000000, /* 10 ms */
+		};
+		int fd;
+
+		fd = lkl_sys_open(dev_str, LKL_O_RDONLY | LKL_O_EXCL, 0);
+		if (fd >= 0) {
+			lkl_sys_close(fd);
+			break;
+		}
+		if (fd != -LKL_EBUSY)
+			return fd;
+		lkl_sys_nanosleep(&ts, NULL);
+		timeout_ms -= 10;
+	} while (timeout_ms > 0);
+
 	err = lkl_sys_unlink(dev_str);
 	if (err)
 		return err;
