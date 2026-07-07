@@ -1,1 +1,3 @@
 kernel/vmlinux.lds
+kernel/vmlinux-mach-o.lds
+kernel/vmlinux-fuzzing-postlink.lds

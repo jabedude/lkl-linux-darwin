@@ -17,3 +17,4 @@ tests/autoconf.sh
 *.pyc
 bin/stat
 kernel.config
+*.dylib
